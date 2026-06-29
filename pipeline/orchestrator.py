@@ -71,18 +71,21 @@ class PipelineOrchestrator:
     async def run(
         self,
         industries: list[str] | None = None,
-        limit_per_industry: int | None = None,
+        total_limit: int = 5,
     ) -> list[Lead]:
         industries = industries or settings.industry_list
-        limit = limit_per_industry or settings.lead_batch_size
+        # Distribute the total limit evenly across industries
+        per_industry = max(1, -(-total_limit // len(industries)))  # ceiling divide
 
         all_leads: list[Lead] = []
 
         console.rule("[bold blue]SMB Discovery Pipeline — Charlotte, NC")
 
         for industry in industries:
+            if len(all_leads) >= total_limit:
+                break
             console.rule(f"[cyan]{industry.upper()}")
-            businesses = await self.prospector.discover(industry, limit=limit)
+            businesses = await self.prospector.discover(industry, limit=per_industry)
             console.log(f"Found {len(businesses)} businesses")
 
             tasks = [self._process_business(b) for b in businesses]

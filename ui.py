@@ -29,7 +29,7 @@ with st.sidebar:
     selected_industries = st.multiselect(
         "Industries", all_industries, default=["plumber"]
     )
-    limit = st.slider("Businesses per industry", 1, 25, 5)
+    limit = st.slider("Total businesses to scan", 1, 50, 5)
     min_score = st.slider("Min opportunity score", 0, 100, 40)
 
     st.divider()
@@ -61,7 +61,7 @@ with tab_run:
 
     st.write(
         f"Scraping Google Maps for **{', '.join(selected_industries) or '—'}** "
-        f"— up to **{limit}** businesses each."
+        f"— **{limit}** businesses total."
     )
 
     run_btn = st.button("🚀 Run", type="primary", disabled=not selected_industries, use_container_width=True)
@@ -81,7 +81,7 @@ with tab_run:
             orchestrator.prospector.scraper = scraper
             return await orchestrator.run(
                 industries=selected_industries,
-                limit_per_industry=limit,
+                total_limit=limit,
             )
 
         status.info("Scraping Google Maps… this takes 20–40 seconds per industry.")
