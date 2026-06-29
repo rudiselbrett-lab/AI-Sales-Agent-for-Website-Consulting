@@ -58,6 +58,9 @@ class WebsiteAnalysisAgent:
     async def _ai_score(
         self, business: Business, signals: dict, crawl: CrawlResult
     ) -> WebsiteAnalysis:
+        if not settings.anthropic_api_key:
+            return self._heuristic_score(business, signals)
+
         homepage_snippet = crawl.pages.get("/", "")[:3000]
 
         prompt = f"""You are a website conversion and SEO auditor evaluating a local service business website.
@@ -108,6 +111,45 @@ Scoring guidance (0–100):
         except json.JSONDecodeError:
             ai_data = {}
 
+        return self._build_analysis(business, signals, ai_data)
+
+    def _heuristic_score(self, business: Business, signals: dict) -> WebsiteAnalysis:
+        """Pure heuristic scoring when no Claude key is available."""
+        score = 50
+        issues, wins = [], []
+
+        if not signals["has_ssl"]:
+            score -= 10
+            issues.append("No HTTPS — browsers may warn visitors")
+        if not signals["has_contact_form"] and not signals["has_phone_cta"]:
+            score -= 10
+            issues.append("No visible contact CTA")
+            wins.append("Add a click-to-call button above the fold")
+        if not signals["has_title_tag"]:
+            score -= 8
+            issues.append("Missing title tag — hurts SEO")
+            wins.append("Add a descriptive title tag")
+        if not signals["has_meta_description"]:
+            score -= 5
+            wins.append("Add a meta description for search snippets")
+        if signals["load_time_seconds"] and signals["load_time_seconds"] > 3:
+            score -= 8
+            issues.append(f"Slow load: {signals['load_time_seconds']}s")
+            wins.append("Compress images and enable browser caching")
+        if not signals["has_schema_markup"]:
+            score -= 5
+
+        score = max(10, min(100, score))
+        return self._build_analysis(business, signals, {
+            "website_score": score,
+            "summary": f"Heuristic audit of {business.name}'s website. Add your Anthropic key for a full AI-generated analysis.",
+            "top_issues": issues,
+            "quick_wins": wins,
+            "mobile_friendly": False,
+            "has_clear_services_page": signals["has_services_page"],
+        })
+
+    def _build_analysis(self, business: Business, signals: dict, ai_data: dict) -> WebsiteAnalysis:
         return WebsiteAnalysis(
             url=business.website_url or "",
             has_title_tag=signals["has_title_tag"],

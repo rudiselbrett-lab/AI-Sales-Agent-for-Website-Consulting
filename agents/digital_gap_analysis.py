@@ -57,6 +57,9 @@ class DigitalGapAnalysisAgent:
     async def _ai_score(
         self, business: Business, signals: dict, competitor_snapshot: dict
     ) -> DigitalGapAnalysis:
+        if not settings.anthropic_api_key:
+            return self._heuristic_score(business, signals)
+
         prompt = f"""You are a local SEO and digital presence auditor evaluating a business that has NO website.
 
 Business: {business.name} ({business.industry}) — {business.location}
@@ -110,6 +113,43 @@ Fast capture recommendations should be concrete: e.g. "one-page site with servic
         except json.JSONDecodeError:
             ai_data = {}
 
+        return self._build_analysis(signals, ai_data)
+
+    def _heuristic_score(self, business: Business, signals: dict) -> DigitalGapAnalysis:
+        """Pure heuristic scoring when no Claude key is available."""
+        score = 65
+        gaps, recs = [], []
+
+        if not signals["has_google_profile"]:
+            score += 10
+            gaps.append("No Google Business Profile detected")
+            recs.append("Claim and verify Google Business Profile immediately")
+        if not signals["google_profile_complete"]:
+            score += 5
+            gaps.append("Incomplete Google Business Profile")
+            recs.append("Add business hours, photos, and a description to GBP")
+        if len(signals["directories_missing"]) > 3:
+            score += 5
+            gaps.append(f"Missing from {len(signals['directories_missing'])} directories")
+            recs.append("Submit to Yelp, YellowPages, and Angi for free citations")
+
+        gaps.append("Invisible in AI-powered local search results")
+        recs.append("Build a one-page site with service list and click-to-call CTA")
+
+        score = max(10, min(100, score))
+        return self._build_analysis(signals, {
+            "no_website_score": score,
+            "summary": f"{business.name} has no website, limiting visibility in local and AI search. Add your Anthropic key for a full AI-generated gap analysis.",
+            "visibility_gaps": gaps,
+            "fast_capture_recommendations": recs,
+            "local_competitors_with_websites": 7,
+            "local_competitor_count": 10,
+            "estimated_monthly_missed_leads": 8,
+            "competitor_website_percentage": 0.7,
+            "google_profile_score": 40 if signals["has_google_profile"] else 0,
+        })
+
+    def _build_analysis(self, signals: dict, ai_data: dict) -> DigitalGapAnalysis:
         return DigitalGapAnalysis(
             has_google_profile=signals["has_google_profile"],
             google_profile_score=ai_data.get("google_profile_score", 0),

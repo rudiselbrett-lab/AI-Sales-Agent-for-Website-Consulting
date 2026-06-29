@@ -25,7 +25,9 @@ class EmailDraftAgent:
         track: TrackType,
         tokens: dict[str, str],
     ) -> EmailDraft:
-        if track == TrackType.WEBSITE_EXISTS:
+        if not settings.anthropic_api_key:
+            subject, body = self._template_email(track, tokens)
+        elif track == TrackType.WEBSITE_EXISTS:
             subject, body = await self._draft_website_email(tokens)
         else:
             subject, body = await self._draft_no_website_email(tokens)
@@ -102,3 +104,39 @@ Return JSON with keys "subject" and "body". Subject line under 8 words.
             return data.get("subject", "Quick note about your online presence"), data.get("body", "")
         except json.JSONDecodeError:
             return "Quick note about your online presence", raw
+
+    def _template_email(self, track: TrackType, t: dict) -> tuple[str, str]:
+        """Static template used when no Anthropic key is configured."""
+        name = t.get("OwnerName", "there")
+        biz = t.get("BusinessName", "your business")
+        city = t.get("City", "Charlotte")
+
+        if track == TrackType.WEBSITE_EXISTS:
+            subject = f"Quick note about {biz}'s website"
+            body = (
+                f"Hi {name},\n\n"
+                f"I was looking at local {t.get('Industry', 'service')} businesses in {city} "
+                f"and came across {biz}.\n\n"
+                f"Your current website has a few gaps that could be limiting how many calls "
+                f"you get from mobile users and local search — things like load speed, "
+                f"service clarity, and contact friction.\n\n"
+                f"I put together a quick free breakdown showing what people see when they "
+                f"search for your services and a few high-impact changes that could increase "
+                f"inbound calls. Happy to send it over if useful.\n\n"
+                f"– {SENDER_NAME}"
+            )
+        else:
+            pct = t.get("CompetitorPct", "70")
+            subject = f"Something worth a look, {biz}"
+            body = (
+                f"Hi {name},\n\n"
+                f"I was researching local {t.get('Industry', 'service')} businesses in {city} "
+                f"and couldn't find a website for {biz}.\n\n"
+                f"About {pct}% of your local competitors have websites, which means they're "
+                f"capturing inbound search traffic and quote requests that you're likely missing.\n\n"
+                f"I put together a free breakdown showing what people see when they search for "
+                f"your services, how competitors are showing up, and the fastest way to start "
+                f"capturing those leads. Happy to send it over.\n\n"
+                f"– {SENDER_NAME}"
+            )
+        return subject, body
