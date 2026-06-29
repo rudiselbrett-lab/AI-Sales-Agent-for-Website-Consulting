@@ -113,11 +113,18 @@ class GoogleMapsScraper:
 
             # Step 2: click each card to get website URL
             businesses: list[Business] = []
+            seen_maps_urls: set[str] = set()
             for i, biz in enumerate(cards[:limit]):
                 try:
                     biz = await self._enrich_with_website(page, biz, i)
                 except Exception as exc:
                     console.log(f"[dim]Website enrichment failed for {biz.name}: {exc}[/dim]")
+                # Skip if this Maps URL already belongs to a previous business (phantom duplicate)
+                if biz.google_maps_url:
+                    if biz.google_maps_url in seen_maps_urls:
+                        console.log(f"[dim]Duplicate Maps URL — skipping {biz.name}[/dim]")
+                        continue
+                    seen_maps_urls.add(biz.google_maps_url)
                 businesses.append(biz)
                 await asyncio.sleep(0.3)
 
@@ -190,8 +197,11 @@ class GoogleMapsScraper:
         # Skip very short names or common non-business fragments
         if len(name) < 4:
             return None
-        ui_fragments = {"dr", "visit", "visit dr", "open", "closed", "more", "back", "menu"}
+        ui_fragments = {"dr", "visit", "open", "closed", "more", "back", "menu"}
         if name.lower() in ui_fragments:
+            return None
+        # "Visit <Business Name>" is a Maps UI button label, not a business
+        if name.lower().startswith("visit "):
             return None
 
         rating = None

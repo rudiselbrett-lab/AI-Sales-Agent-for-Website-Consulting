@@ -34,7 +34,7 @@ class WebsiteRouter:
             status = await self._probe_url(business.website_url)
             business = business.model_copy(update={"website_status": status})
 
-        # Step 2: if no URL (or broken), try Google search as fallback
+        # Step 2: DuckDuckGo search fallback
         if business.website_status != WebsiteStatus.EXISTS:
             found_url = await self._google_search_fallback(business)
             if found_url:
@@ -42,9 +42,17 @@ class WebsiteRouter:
                     "website_url": found_url,
                     "website_status": WebsiteStatus.EXISTS,
                 })
-                console.log(
-                    f"[green]Found via Google search:[/green] {business.name} → {found_url}"
-                )
+                console.log(f"[green]Found via search:[/green] {business.name} → {found_url}")
+
+        # Step 3: domain-guessing fallback — try common patterns like apexlandscapedesign.com
+        if business.website_status != WebsiteStatus.EXISTS:
+            found_url = await self._domain_guess_fallback(business)
+            if found_url:
+                business = business.model_copy(update={
+                    "website_url": found_url,
+                    "website_status": WebsiteStatus.EXISTS,
+                })
+                console.log(f"[green]Found via domain guess:[/green] {business.name} → {found_url}")
 
         if business.website_status == WebsiteStatus.EXISTS:
             console.log(f"[green]Track A[/green] → {business.name} | {business.website_url}")
@@ -170,3 +178,47 @@ class WebsiteRouter:
     def _extract_domain(self, url: str) -> str:
         m = re.search(r"https?://(?:www\.)?([^/?#]+)", url)
         return m.group(1).lower() if m else ""
+
+    async def _domain_guess_fallback(self, business: Business) -> str | None:
+        """
+        Third-layer fallback: try common domain patterns built from the business name.
+        e.g. "Apex Landscape Design LLC" → apexlandscapedesign.com, apexdesign.com, etc.
+        """
+        stop_words = {"the", "and", "of", "a", "an", "in", "at", "for",
+                      "llc", "inc", "co", "company", "services", "service",
+                      "group", "solutions", "professionals", "pros", "lawn",
+                      "care", "landscaping", "landscape"}
+        raw_words = re.sub(r"[^a-z0-9\s]", "", business.name.lower()).split()
+        words = [w for w in raw_words if w not in stop_words and len(w) > 2]
+
+        if not words:
+            return None
+
+        candidates = set()
+        # All meaningful words concatenated
+        candidates.add("".join(words) + ".com")
+        # First + last word
+        if len(words) >= 2:
+            candidates.add(words[0] + words[-1] + ".com")
+            candidates.add(words[-1] + words[0] + ".com")
+        # First word only
+        candidates.add(words[0] + ".com")
+        # All words with city abbreviation
+        city_slug = re.sub(r"[^a-z]", "", business.city.lower())[:3]
+        candidates.add("".join(words) + city_slug + ".com")
+
+        for domain in candidates:
+            url = f"https://www.{domain}"
+            status = await self._probe_url(url)
+            if status == WebsiteStatus.EXISTS:
+                # Verify the page actually mentions the business (avoid accidental matches)
+                try:
+                    async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                        resp = await client.get(url)
+                        page_text = resp.text.lower()
+                    if any(w in page_text for w in words[:2]):
+                        return url
+                except Exception:
+                    pass
+
+        return None
