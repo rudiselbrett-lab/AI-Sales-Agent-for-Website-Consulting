@@ -58,7 +58,7 @@ with st.sidebar:
 os.environ["MIN_OPPORTUNITY_SCORE"] = str(min_score)
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_run, tab_queue, tab_lead = st.tabs(["▶ Run", "📋 Review Queue", "🔍 Lead Detail"])
+tab_run, tab_analyze, tab_queue, tab_lead = st.tabs(["▶ Run", "🔬 Analyze", "📋 Review Queue", "🔍 Lead Detail"])
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Run
@@ -146,7 +146,138 @@ with tab_run:
         st.info("Pick your industries in the sidebar and hit **Run**. No API keys needed.")
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — Review Queue
+# TAB 2 — Analyze Selected
+# ════════════════════════════════════════════════════════════════════════════
+with tab_analyze:
+    st.header("Analyze Selected Businesses")
+
+    leads_for_analysis = st.session_state.get("leads", [])
+
+    if not leads_for_analysis:
+        st.info("Run the pipeline first, then come back here to analyze specific businesses.")
+    else:
+        st.caption("Pick the businesses you want to deep-analyze. The agent will visit their website (or confirm they have none) and score the quality.")
+
+        options = [l.business.name for l in leads_for_analysis]
+        selected_names = st.multiselect("Select businesses to analyze", options, default=options[:3])
+
+        analyze_btn = st.button(
+            f"🔬 Analyze {len(selected_names)} business{'es' if len(selected_names) != 1 else ''}",
+            type="primary",
+            disabled=not selected_names,
+            use_container_width=True,
+        )
+
+        if analyze_btn and selected_names:
+            from agents import WebsiteCrawlAgent, WebsiteAnalysisAgent, DigitalGapAnalysisAgent, OpportunityScoringEngine
+            from agents.presence_reconstruction import PresenceReconstructionAgent
+
+            crawler = WebsiteCrawlAgent()
+            web_analyzer = WebsiteAnalysisAgent()
+            gap_analyzer = DigitalGapAnalysisAgent()
+            scorer = OpportunityScoringEngine()
+            presence_agent = PresenceReconstructionAgent()
+
+            targets = [l for l in leads_for_analysis if l.business.name in selected_names]
+
+            progress = st.progress(0, text="Starting analysis…")
+            results_placeholder = st.empty()
+
+            async def _analyze_leads(leads):
+                updated = []
+                for i, lead in enumerate(leads):
+                    progress.progress((i) / len(leads), text=f"Analyzing {lead.business.name}…")
+                    try:
+                        if lead.track.value == "website_exists" and lead.business.website_url:
+                            crawl = await crawler.crawl(lead.business)
+                            if crawl and crawl.pages:
+                                website_analysis = await web_analyzer.analyze(lead.business, crawl)
+                                digital_gap_analysis = None
+                            else:
+                                business = await presence_agent.reconstruct(lead.business)
+                                website_analysis = None
+                                digital_gap_analysis = await gap_analyzer.analyze(business)
+                        else:
+                            business = await presence_agent.reconstruct(lead.business)
+                            website_analysis = None
+                            digital_gap_analysis = await gap_analyzer.analyze(business)
+
+                        score = scorer.score(
+                            track=lead.track,
+                            website_analysis=website_analysis,
+                            digital_gap_analysis=digital_gap_analysis,
+                        )
+                        updated.append(lead.model_copy(update={
+                            "website_analysis": website_analysis,
+                            "digital_gap_analysis": digital_gap_analysis,
+                            "opportunity_score": score,
+                        }))
+                    except Exception as exc:
+                        st.warning(f"Could not analyze {lead.business.name}: {exc}")
+                        updated.append(lead)
+                return updated
+
+            updated_leads = asyncio.run(_analyze_leads(targets))
+            progress.progress(1.0, text="Done!")
+
+            # Merge updated leads back into session state
+            name_to_updated = {l.business.name: l for l in updated_leads}
+            st.session_state["leads"] = [
+                name_to_updated.get(l.business.name, l) for l in leads_for_analysis
+            ]
+
+            # Show results
+            for lead in sorted(updated_leads, key=lambda x: x.opportunity_score.final_score if x.opportunity_score else 0, reverse=True):
+                score = lead.opportunity_score
+                wa = lead.website_analysis
+                has_site = lead.track.value == "website_exists"
+
+                priority_color = {"high": "🔴", "medium": "🟡", "low": "⚫"}.get(
+                    score.priority.value if score else "low", "⚫"
+                )
+                with st.expander(
+                    f"{priority_color} **{lead.business.name}** · {'Has site' if has_site else 'No site'} · Score {score.final_score if score else '—'}",
+                    expanded=True,
+                ):
+                    if wa:
+                        st.progress(wa.website_score / 100, text=f"Website score: {wa.website_score}/100")
+                        if wa.is_stale:
+                            st.error(f"⚠️ Stale site — {wa.age_label}")
+                        elif wa.copyright_year:
+                            st.warning(f"🕐 {wa.age_label}")
+
+                        if wa.summary:
+                            st.markdown(wa.summary)
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if wa.top_issues:
+                                st.markdown("**Issues**")
+                                for issue in wa.top_issues:
+                                    st.markdown(f"- ⚠️ {issue}")
+                        with col2:
+                            if wa.quick_wins:
+                                st.markdown("**Quick wins**")
+                                for win in wa.quick_wins:
+                                    st.markdown(f"- ✅ {win}")
+
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("Mobile", "✓" if wa.has_mobile_viewport else "✗")
+                        m2.metric("HTTPS", "✓" if wa.has_ssl else "✗")
+                        m3.metric("Load time", f"{wa.load_time_seconds}s" if wa.load_time_seconds else "—")
+
+                    elif lead.digital_gap_analysis:
+                        g = lead.digital_gap_analysis
+                        st.progress(g.no_website_score / 100, text=f"Opportunity score: {g.no_website_score}/100")
+                        if g.summary:
+                            st.markdown(g.summary)
+
+        elif "leads" in st.session_state and not analyze_btn:
+            st.info("Select businesses above and click **Analyze** to run a deep website audit.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 3 — Review Queue
 # ════════════════════════════════════════════════════════════════════════════
 with tab_queue:
     st.header("Review Queue")
@@ -205,6 +336,8 @@ with tab_queue:
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 3 — Lead Detail
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Lead Detail
 # ════════════════════════════════════════════════════════════════════════════
 with tab_lead:
     st.header("Lead Detail")
