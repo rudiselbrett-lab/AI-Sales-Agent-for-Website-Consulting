@@ -80,41 +80,67 @@ class WebsiteRouter:
                 resp = await client.get(url, params={"q": query, "num": 10})
                 html = resp.text
 
-            # Extract href values from search result links
-            # Google wraps organic results in <a href="/url?q=..."> or direct hrefs
-            candidates = re.findall(r'href="(https?://[^"]+)"', html)
+            # Pull out search results as (url, surrounding_text) pairs
+            # Google wraps links as <a href="/url?q=..."> with nearby title/snippet text
+            results = self._extract_search_results(html)
 
-            for candidate in candidates:
-                # Strip Google redirect wrappers
-                if "google.com/url" in candidate:
-                    m = re.search(r"[?&]q=(https?://[^&]+)", candidate)
-                    candidate = m.group(1) if m else candidate
-
-                domain = self._extract_domain(candidate)
+            for candidate_url, context_text in results:
+                domain = self._extract_domain(candidate_url)
                 if not domain:
                     continue
 
-                # Skip known directory/social sites
+                # Skip directories and social sites
                 if any(skip in domain for skip in SKIP_DOMAINS):
                     continue
 
-                # Skip Google's own domains
                 if "google." in domain:
                     continue
 
-                # Only accept if the domain looks like it belongs to this business
-                if not self._domain_matches_business(domain, business.name):
+                # Accept if domain matches business name OR if the page context
+                # (title/snippet) mentions the business name — catches branded domains
+                # like ncbd.us for "Nichols Custom Builders Design"
+                domain_ok = self._domain_matches_business(domain, business.name)
+                context_ok = self._context_mentions_business(context_text, business.name)
+
+                if not domain_ok and not context_ok:
                     continue
 
-                # Confirm the site is live
-                status = await self._probe_url(candidate)
+                status = await self._probe_url(candidate_url)
                 if status == WebsiteStatus.EXISTS:
-                    return candidate
+                    return candidate_url
 
         except Exception as exc:
             console.log(f"[dim]Google search fallback failed for {business.name}: {exc}[/dim]")
 
         return None
+
+    def _extract_search_results(self, html: str) -> list[tuple[str, str]]:
+        """Returns list of (url, context_text) from Google search HTML."""
+        results = []
+        # Find all href URLs and grab surrounding text (±200 chars) as context
+        for m in re.finditer(r'href="(https?://[^"]+)"', html):
+            raw_url = m.group(1)
+            if "google.com/url" in raw_url:
+                q = re.search(r"[?&]q=(https?://[^&]+)", raw_url)
+                url = q.group(1) if q else raw_url
+            else:
+                url = raw_url
+            start = max(0, m.start() - 200)
+            end = min(len(html), m.end() + 200)
+            context = re.sub(r"<[^>]+>", " ", html[start:end])  # strip tags
+            results.append((url, context))
+        return results
+
+    def _context_mentions_business(self, context: str, business_name: str) -> bool:
+        """Returns True if the search result snippet mentions the business name."""
+        stop_words = {"the", "and", "of", "a", "an", "in", "at", "for",
+                      "llc", "inc", "co", "company", "services", "service"}
+        name_words = re.sub(r"[^a-z0-9\s]", "", business_name.lower()).split()
+        meaningful = [w for w in name_words if w not in stop_words and len(w) > 2]
+        context_lower = context.lower()
+        # Require at least 2 meaningful words to appear in the snippet
+        matches = sum(1 for w in meaningful if w in context_lower)
+        return matches >= min(2, len(meaningful))
 
     def _domain_matches_business(self, domain: str, business_name: str) -> bool:
         """
