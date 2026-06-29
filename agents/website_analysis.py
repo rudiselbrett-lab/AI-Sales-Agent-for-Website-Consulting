@@ -51,7 +51,9 @@ class WebsiteAnalysisAgent:
         if not crawl.is_https:
             staleness_reasons.append("Still on HTTP (not HTTPS) — browser security warnings likely")
 
-        is_stale = len(staleness_reasons) >= 2 or (copyright_year is not None and copyright_year < current_year - 4)
+        stale_years = settings.stale_site_years
+        is_stale = (copyright_year is not None and copyright_year < current_year - stale_years) or \
+                   (len(staleness_reasons) >= 3)
 
         return {
             "has_title_tag": bool(soup.find("title") and soup.find("title").get_text(strip=True)),
@@ -175,15 +177,16 @@ Scoring guidance (0–100):
         issues, wins = [], []
 
         # ── Staleness (biggest deductions) ───────────────────────────────────
+        stale_threshold = settings.stale_site_years  # default 10
         copyright_year = signals.get("copyright_year")
         if copyright_year:
             age = current_year - copyright_year
-            if age >= 5:
-                score -= 25
-                issues.append(f"Website appears to be from {copyright_year} — {age} years without a visible update")
-            elif age >= 3:
-                score -= 12
-                issues.append(f"Copyright shows {copyright_year} — site may be outdated")
+            if age >= stale_threshold:
+                score -= 30
+                issues.append(f"Website last updated around {copyright_year} — {age} years old, severely outdated")
+            elif age >= stale_threshold // 2:
+                score -= 10
+                issues.append(f"Copyright shows {copyright_year} — site is aging and may need a refresh")
 
         if signals.get("uses_outdated_tech"):
             score -= 15

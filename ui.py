@@ -22,6 +22,8 @@ with st.sidebar:
     st.caption("Charlotte, NC — Live Data")
     st.divider()
 
+    from config import settings as cfg
+
     all_industries = [
         "plumber", "electrician", "hvac", "roofer", "landscaper",
         "auto-repair", "dentist", "chiropractor", "restaurant", "salon",
@@ -30,6 +32,11 @@ with st.sidebar:
         "Industries", all_industries, default=["plumber"]
     )
     limit = st.slider("Total businesses to scan", 1, 50, 5)
+    stale_years = st.slider(
+        "Flag sites older than (years)", 3, 20, cfg.stale_site_years,
+        help="Sites with a copyright year older than this are marked as stale."
+    )
+    import os; os.environ["STALE_SITE_YEARS"] = str(stale_years)
     min_score = st.slider("Min opportunity score", 0, 100, 40)
 
     st.divider()
