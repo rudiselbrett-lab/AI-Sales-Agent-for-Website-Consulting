@@ -63,11 +63,11 @@ class WebsiteRouter:
 
     async def _google_search_fallback(self, business: Business) -> str | None:
         """
-        Searches Google for the business name + city and returns the first
-        result URL that looks like the business's own website.
+        Searches DuckDuckGo for the business name + city and returns the first
+        result URL that isn't a directory or social site.
+        DuckDuckGo's plain-HTML endpoint is reliable and scraper-friendly.
         """
         query = f'"{business.name}" {business.city} {business.state}'
-        url = "https://www.google.com/search"
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -76,33 +76,33 @@ class WebsiteRouter:
             )
         }
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=headers) as client:
-                resp = await client.get(url, params={"q": query, "num": 10})
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
+                resp = await client.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query},
+                )
                 html = resp.text
 
-            # Pull out search results as (url, surrounding_text) pairs
-            # Google wraps links as <a href="/url?q=..."> with nearby title/snippet text
-            results = self._extract_search_results(html)
+            results = self._extract_ddg_results(html)
+            console.log(f"[dim]DDG search for '{business.name}' → {len(results)} candidates[/dim]")
 
             for candidate_url, context_text in results:
                 domain = self._extract_domain(candidate_url)
                 if not domain:
                     continue
-
-                # Skip directories and social sites
                 if any(skip in domain for skip in SKIP_DOMAINS):
                     continue
-
-                if "google." in domain:
+                if "duckduckgo." in domain or "bing." in domain:
                     continue
 
-                # Accept if domain matches business name OR if the page context
-                # (title/snippet) mentions the business name — catches branded domains
-                # like ncbd.us for "Nichols Custom Builders Design"
+                # Accept: domain contains a meaningful word from the business name,
+                # OR the result snippet mentions the business name.
+                # This catches both "mainstreetsod.com" and branded domains like "ncbd.us".
                 domain_ok = self._domain_matches_business(domain, business.name)
                 context_ok = self._context_mentions_business(context_text, business.name)
 
                 if not domain_ok and not context_ok:
+                    console.log(f"[dim]Skipping {domain} — no name match for '{business.name}'[/dim]")
                     continue
 
                 status = await self._probe_url(candidate_url)
@@ -110,25 +110,29 @@ class WebsiteRouter:
                     return candidate_url
 
         except Exception as exc:
-            console.log(f"[dim]Google search fallback failed for {business.name}: {exc}[/dim]")
+            console.log(f"[dim]Search fallback failed for {business.name}: {exc}[/dim]")
 
         return None
 
-    def _extract_search_results(self, html: str) -> list[tuple[str, str]]:
-        """Returns list of (url, context_text) from Google search HTML."""
+    def _extract_ddg_results(self, html: str) -> list[tuple[str, str]]:
+        """
+        DuckDuckGo HTML returns results in <a class="result__url"> and
+        <a class="result__a"> tags with clean, unwrapped URLs.
+        Returns list of (url, snippet_text).
+        """
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
         results = []
-        # Find all href URLs and grab surrounding text (±200 chars) as context
-        for m in re.finditer(r'href="(https?://[^"]+)"', html):
-            raw_url = m.group(1)
-            if "google.com/url" in raw_url:
-                q = re.search(r"[?&]q=(https?://[^&]+)", raw_url)
-                url = q.group(1) if q else raw_url
-            else:
-                url = raw_url
-            start = max(0, m.start() - 200)
-            end = min(len(html), m.end() + 200)
-            context = re.sub(r"<[^>]+>", " ", html[start:end])  # strip tags
-            results.append((url, context))
+        for result_div in soup.select(".result"):
+            link = result_div.select_one("a.result__a")
+            snippet = result_div.select_one(".result__snippet")
+            if not link:
+                continue
+            href = link.get("href", "")
+            if not href.startswith("http"):
+                continue
+            context = snippet.get_text(" ", strip=True) if snippet else ""
+            results.append((href, context))
         return results
 
     def _context_mentions_business(self, context: str, business_name: str) -> bool:
