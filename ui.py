@@ -26,15 +26,34 @@ with st.sidebar:
     st.caption("Charlotte, NC — Two-Track Pipeline")
     st.divider()
 
-    st.subheader("API Keys")
-    anthropic_key = st.text_input("Anthropic API Key", type="password",
-                                   value=os.environ.get("ANTHROPIC_API_KEY", ""))
-    serpapi_key   = st.text_input("SerpAPI Key", type="password",
-                                   value=os.environ.get("SERPAPI_KEY", ""))
-    hunter_key    = st.text_input("Hunter.io Key", type="password",
-                                   value=os.environ.get("HUNTER_API_KEY", ""))
+    st.subheader("API Keys (all optional)")
+    st.caption("Leave any field blank — the pipeline still runs on mock data.")
 
-    st.caption("Leave blank to run on mock data (no API calls made).")
+    anthropic_key = st.text_input(
+        "Anthropic API Key",
+        type="password",
+        value=os.environ.get("ANTHROPIC_API_KEY", ""),
+        help="Optional. Without this, emails use a static template instead of AI-generated copy.",
+        placeholder="sk-ant-... (optional)",
+    )
+    serpapi_key = st.text_input(
+        "SerpAPI Key",
+        type="password",
+        value=os.environ.get("SERPAPI_KEY", ""),
+        help="Optional. Without this, the pipeline uses fake Charlotte businesses for testing.",
+        placeholder="optional — uses mock data without it",
+    )
+    hunter_key = st.text_input(
+        "Hunter.io Key",
+        type="password",
+        value=os.environ.get("HUNTER_API_KEY", ""),
+        help="Optional. Without this, contact discovery is skipped.",
+        placeholder="optional",
+    )
+
+    keys_set = sum([bool(anthropic_key), bool(serpapi_key), bool(hunter_key)])
+    if keys_set == 0:
+        st.info("Running in **demo mode** — mock data, heuristic scores, template emails.")
     st.divider()
 
     st.subheader("Run Settings")
