@@ -192,7 +192,7 @@ with tab_queue:
     else:
         st.write(f"**{len(pending)} leads** pending review")
 
-        for r in sorted(pending, key=lambda x: x.get("score", 0), reverse=True):
+        for idx, r in enumerate(sorted(pending, key=lambda x: x.get("score", 0), reverse=True)):
             priority = r.get("priority", "low").upper()
             color = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "⚫"}.get(priority, "⚫")
             track_label = "Track B — No Site" if r["track"] == "no_website" else "Track A — Has Site"
@@ -216,17 +216,17 @@ with tab_queue:
                         "Email Draft",
                         value=r["email_body"],
                         height=180,
-                        key=f"body_{r['business_name']}",
+                        key=f"body_{idx}_{r['business_name'][:20]}",
                     )
 
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
-                    if st.button("✅ Mark Sent", key=f"send_{r['business_name']}"):
+                    if st.button("✅ Mark Sent", key=f"send_{idx}_{r['business_name'][:20]}"):
                         q.mark_sent(r["business_name"])
                         st.success("Marked as sent")
                         st.rerun()
                 with btn_col2:
-                    if st.button("⏭ Skip", key=f"skip_{r['business_name']}"):
+                    if st.button("⏭ Skip", key=f"skip_{idx}_{r['business_name'][:20]}"):
                         q.mark_skipped(r["business_name"])
                         st.info("Skipped")
                         st.rerun()
