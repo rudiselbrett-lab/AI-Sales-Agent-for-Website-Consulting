@@ -57,6 +57,11 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Run Settings")
+    debug_browser = st.toggle(
+        "Show browser window",
+        value=False,
+        help="Opens a visible Chrome window so you can watch the scraper work. Disable for faster runs.",
+    )
     all_industries = [
         "plumber", "electrician", "hvac", "roofer", "landscaper",
         "auto-repair", "dentist", "chiropractor", "restaurant", "salon",
@@ -109,7 +114,11 @@ with tab_run:
         _log("Starting pipeline…")
 
         async def _run():
+            from agents.google_maps_scraper import GoogleMapsScraper
+            from agents.prospecting import ProspectingAgent
+            scraper = GoogleMapsScraper(headless=not debug_browser, slow_mo=300 if debug_browser else 0)
             orchestrator = PipelineOrchestrator()
+            orchestrator.prospector.scraper = scraper
             return await orchestrator.run(
                 industries=selected_industries,
                 limit_per_industry=limit,
