@@ -187,6 +187,13 @@ class GoogleMapsScraper:
         if any(skip in name.lower() for skip in ["directions", "save", "share", "website", "call"]):
             return None
 
+        # Skip very short names or common non-business fragments
+        if len(name) < 4:
+            return None
+        ui_fragments = {"dr", "visit", "visit dr", "open", "closed", "more", "back", "menu"}
+        if name.lower() in ui_fragments:
+            return None
+
         rating = None
         review_count = None
         address = None
@@ -272,12 +279,28 @@ class GoogleMapsScraper:
             "a[data-item-id='authority']",
             "a[aria-label^='Website']",
             "a[aria-label*='website']",
+            "a[aria-label*='Website']",
+            "a[jsaction*='pane.website']",
         ]:
             try:
                 el = page.locator(selector).first
                 if await el.count() > 0:
                     href = await el.get_attribute("href") or ""
                     if href and not href.startswith("https://www.google"):
+                        website_url = self._clean_url(href)
+                        break
+            except Exception:
+                pass
+
+        # Broader fallback: grab any external link from the detail panel
+        if not website_url:
+            try:
+                panel_links = await page.locator(
+                    "div[role='main'] a[href^='http']"
+                ).all()
+                for link_el in panel_links:
+                    href = await link_el.get_attribute("href") or ""
+                    if href and "google." not in href and "goo.gl" not in href:
                         website_url = self._clean_url(href)
                         break
             except Exception:
