@@ -131,8 +131,16 @@ with tab_run:
                     "Score": score.final_score if score else "—",
                     "Priority": (score.priority.value if score else "—").upper(),
                     "Phone": l.business.phone or "—",
+                    "Maps": l.business.google_maps_url or "—",
                 })
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.dataframe(
+                rows,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Maps": st.column_config.LinkColumn("Maps", display_text="View →"),
+                },
+            )
 
     elif "leads" not in st.session_state:
         st.info("Pick your industries in the sidebar and hit **Run**. No API keys needed.")
@@ -226,6 +234,8 @@ with tab_lead:
 
             with left:
                 st.subheader("Business Info")
+                if b.google_maps_url:
+                    st.markdown(f"**[View on Google Maps →]({b.google_maps_url})**")
                 st.markdown(f"**Phone:** {b.phone or '—'}")
                 st.markdown(f"**Address:** {b.address or '—'}")
                 st.markdown(f"**Website:** {b.website_url or 'None'}")

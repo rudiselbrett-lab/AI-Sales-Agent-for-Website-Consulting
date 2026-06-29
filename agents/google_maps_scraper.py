@@ -271,6 +271,9 @@ class GoogleMapsScraper:
         await card.click()
         await asyncio.sleep(1.5)
 
+        # Capture the Maps URL from the browser address bar
+        maps_url = page.url if "google.com/maps" in page.url else None
+
         # Website link in detail panel — data-item-id is stable
         website_url = None
 
@@ -323,6 +326,7 @@ class GoogleMapsScraper:
                 pass
 
         return biz.model_copy(update={
+            "google_maps_url": maps_url,
             "website_url": website_url,
             "website_status": WebsiteStatus.EXISTS if website_url else WebsiteStatus.NOT_FOUND,
             "phone": phone or biz.phone,

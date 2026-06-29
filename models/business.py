@@ -16,6 +16,9 @@ class Business(BaseModel):
     phone: str | None = None
     address: str | None = None
 
+    # Source
+    google_maps_url: str | None = None  # direct link back to the Maps listing
+
     # Website detection results
     website_url: str | None = None
     website_status: WebsiteStatus = WebsiteStatus.NOT_FOUND
