@@ -1,53 +1,65 @@
 """
 Business Prospecting Agent
 
-Discovers local SMBs in the target city using SerpAPI (Google Maps search).
-Returns a list of Business objects with basic profile data populated.
+Primary: scrapes Google Maps via Playwright (no API key required)
+Fallback: SerpAPI if SERPAPI_KEY is set
+Dev fallback: mock data if neither is available
 """
 
 import httpx
-import json
 from rich.console import Console
 from config import settings
 from models.business import Business, WebsiteStatus
+from .google_maps_scraper import GoogleMapsScraper
 
 console = Console()
 
 
 class ProspectingAgent:
-    """Discovers SMBs in the target market via Google Maps / local search."""
-
-    SERPAPI_BASE = "https://serpapi.com/search"
 
     def __init__(self):
-        self.api_key = settings.serpapi_key
         self.city = settings.target_city
         self.state = settings.target_state
+        self.scraper = GoogleMapsScraper()
 
     async def discover(self, industry: str, limit: int = 25) -> list[Business]:
-        """Return up to `limit` businesses for a given industry in the target city."""
-        console.log(f"[cyan]Prospecting:[/cyan] searching '{industry}' in {self.city}, {self.state}")
+        console.log(f"[cyan]Prospecting:[/cyan] '{industry}' in {self.city}, {self.state}")
 
-        if not self.api_key:
-            console.log("[yellow]No SERPAPI_KEY — returning mock data[/yellow]")
-            return self._mock_businesses(industry, limit)
+        # Primary: Playwright scraper (free, no key needed)
+        try:
+            results = await self.scraper.search(
+                query=industry,
+                city=self.city,
+                state=self.state,
+                industry=industry,
+                limit=limit,
+            )
+            if results:
+                return results
+        except Exception as exc:
+            console.log(f"[yellow]Scraper failed ({exc}) — trying SerpAPI fallback[/yellow]")
 
+        # Fallback: SerpAPI
+        if settings.serpapi_key:
+            return await self._serpapi_search(industry, limit)
+
+        # Dev fallback: mock data
+        console.log("[yellow]No scraper or API available — using mock data[/yellow]")
+        return self._mock_businesses(industry, limit)
+
+    async def _serpapi_search(self, industry: str, limit: int) -> list[Business]:
         params = {
             "engine": "google_maps",
             "q": f"{industry} in {self.city} {self.state}",
             "type": "search",
-            "api_key": self.api_key,
+            "api_key": settings.serpapi_key,
             "num": limit,
         }
-
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(self.SERPAPI_BASE, params=params)
+            resp = await client.get("https://serpapi.com/search", params=params)
             resp.raise_for_status()
             data = resp.json()
 
-        return self._parse_results(data, industry)
-
-    def _parse_results(self, data: dict, industry: str) -> list[Business]:
         businesses = []
         for result in data.get("local_results", []):
             website_url = result.get("website")
@@ -64,14 +76,12 @@ class ProspectingAgent:
                     google_place_id=result.get("place_id"),
                     google_rating=result.get("rating"),
                     google_review_count=result.get("reviews"),
-                    google_categories=result.get("type", []) if isinstance(result.get("type"), list) else [],
                 )
             )
         return businesses
 
     def _mock_businesses(self, industry: str, limit: int) -> list[Business]:
-        """Returns deterministic mock data for development/testing without API keys."""
-        mock = [
+        return [
             Business(
                 name=f"Charlotte {industry.title()} Co #{i+1}",
                 industry=industry,
@@ -87,4 +97,3 @@ class ProspectingAgent:
             )
             for i in range(min(limit, 10))
         ]
-        return mock
