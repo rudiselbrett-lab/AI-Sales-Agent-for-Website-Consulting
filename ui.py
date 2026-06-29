@@ -1,18 +1,14 @@
 """
-Streamlit UI for the SMB Sales Agent pipeline.
-
-Run with:  streamlit run ui.py
+Streamlit UI — SMB Sales Agent
+Run with: streamlit run ui.py
 """
 
 import asyncio
-import json
 import os
-import sys
 from pathlib import Path
 
 import streamlit as st
 
-# ── page config (must be first Streamlit call) ──────────────────────────────
 st.set_page_config(
     page_title="SMB Sales Agent",
     page_icon="🎯",
@@ -20,103 +16,67 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── sidebar: API keys ────────────────────────────────────────────────────────
+# ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🎯 SMB Sales Agent")
-    st.caption("Charlotte, NC — Two-Track Pipeline")
+    st.caption("Charlotte, NC — Live Data")
     st.divider()
 
-    st.subheader("API Keys (all optional)")
-    st.caption("Leave any field blank — the pipeline still runs on mock data.")
-
-    anthropic_key = st.text_input(
-        "Anthropic API Key",
-        type="password",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""),
-        help="Optional. Without this, emails use a static template instead of AI-generated copy.",
-        placeholder="sk-ant-... (optional)",
-    )
-    serpapi_key = st.text_input(
-        "SerpAPI Key",
-        type="password",
-        value=os.environ.get("SERPAPI_KEY", ""),
-        help="Optional. Without this, the pipeline uses fake Charlotte businesses for testing.",
-        placeholder="optional — uses mock data without it",
-    )
-    hunter_key = st.text_input(
-        "Hunter.io Key",
-        type="password",
-        value=os.environ.get("HUNTER_API_KEY", ""),
-        help="Optional. Without this, contact discovery is skipped.",
-        placeholder="optional",
-    )
-
-    keys_set = sum([bool(anthropic_key), bool(serpapi_key), bool(hunter_key)])
-    if keys_set == 0:
-        st.info("Running in **demo mode** — mock data, heuristic scores, template emails.")
-    st.divider()
-
-    st.subheader("Run Settings")
-    debug_browser = st.toggle(
-        "Show browser window",
-        value=False,
-        help="Opens a visible Chrome window so you can watch the scraper work. Disable for faster runs.",
-    )
     all_industries = [
         "plumber", "electrician", "hvac", "roofer", "landscaper",
         "auto-repair", "dentist", "chiropractor", "restaurant", "salon",
     ]
     selected_industries = st.multiselect(
-        "Industries", all_industries, default=["plumber", "hvac"]
+        "Industries", all_industries, default=["plumber"]
     )
-    limit = st.slider("Leads per industry", 1, 25, 5)
+    limit = st.slider("Businesses per industry", 1, 25, 5)
     min_score = st.slider("Min opportunity score", 0, 100, 40)
 
-# ── inject keys into env so config.py + agents pick them up ─────────────────
-if anthropic_key:
-    os.environ["ANTHROPIC_API_KEY"] = anthropic_key
-if serpapi_key:
-    os.environ["SERPAPI_KEY"] = serpapi_key
-if hunter_key:
-    os.environ["HUNTER_API_KEY"] = hunter_key
-if min_score:
-    os.environ["MIN_OPPORTUNITY_SCORE"] = str(min_score)
+    st.divider()
+    debug_browser = st.toggle(
+        "Show browser while scraping",
+        value=False,
+        help="Watch the scraper work in real time. Useful for debugging.",
+    )
 
-# ── tabs ─────────────────────────────────────────────────────────────────────
-tab_run, tab_queue, tab_lead = st.tabs(["▶ Run Pipeline", "📋 Review Queue", "🔍 Lead Detail"])
+    st.divider()
+    with st.expander("⚙️ Optional AI keys"):
+        st.caption("Add these to get AI-scored analysis and personalised email copy. Not required to find businesses.")
+        anthropic_key = st.text_input("Anthropic API Key", type="password",
+                                       value=os.environ.get("ANTHROPIC_API_KEY", ""),
+                                       placeholder="sk-ant-...")
+        if anthropic_key:
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+
+os.environ["MIN_OPPORTUNITY_SCORE"] = str(min_score)
+
+# ── tabs ──────────────────────────────────────────────────────────────────────
+tab_run, tab_queue, tab_lead = st.tabs(["▶ Run", "📋 Review Queue", "🔍 Lead Detail"])
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 1 — Run Pipeline
+# TAB 1 — Run
 # ════════════════════════════════════════════════════════════════════════════
 with tab_run:
-    st.header("Run Pipeline")
+    st.header("Find Charlotte SMBs")
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.write(
-            f"Will prospect **{', '.join(selected_industries) or 'no industries selected'}** "
-            f"— up to **{limit}** businesses each, min score **{min_score}**."
-        )
-    with col2:
-        run_btn = st.button("🚀 Run", type="primary", disabled=not selected_industries)
+    st.write(
+        f"Scraping Google Maps for **{', '.join(selected_industries) or '—'}** "
+        f"— up to **{limit}** businesses each."
+    )
+
+    run_btn = st.button("🚀 Run", type="primary", disabled=not selected_industries, use_container_width=True)
 
     if run_btn:
         from pipeline import PipelineOrchestrator
+        from agents.google_maps_scraper import GoogleMapsScraper
 
-        progress_box = st.empty()
-        log_box = st.empty()
-        logs: list[str] = []
-
-        def _log(msg: str):
-            logs.append(msg)
-            log_box.code("\n".join(logs[-30:]), language=None)
-
-        _log("Starting pipeline…")
+        status = st.empty()
 
         async def _run():
-            from agents.google_maps_scraper import GoogleMapsScraper
-            from agents.prospecting import ProspectingAgent
-            scraper = GoogleMapsScraper(headless=not debug_browser, slow_mo=300 if debug_browser else 0)
+            scraper = GoogleMapsScraper(
+                headless=not debug_browser,
+                slow_mo=300 if debug_browser else 0,
+            )
             orchestrator = PipelineOrchestrator()
             orchestrator.prospector.scraper = scraper
             return await orchestrator.run(
@@ -124,43 +84,43 @@ with tab_run:
                 limit_per_industry=limit,
             )
 
-        with st.spinner("Pipeline running…"):
-            leads = asyncio.run(_run())
-
+        status.info("Scraping Google Maps… this takes 20–40 seconds per industry.")
+        leads = asyncio.run(_run())
         st.session_state["leads"] = leads
-        st.success(f"Done — {len(leads)} leads generated.")
+        status.empty()
 
-        # summary cards
-        high   = [l for l in leads if l.opportunity_score and l.opportunity_score.priority.value == "high"]
-        medium = [l for l in leads if l.opportunity_score and l.opportunity_score.priority.value == "medium"]
-        track_a = [l for l in leads if l.track.value == "website_exists"]
-        track_b = [l for l in leads if l.track.value == "no_website"]
+        if not leads:
+            st.warning(
+                "No businesses returned. Try enabling **Show browser while scraping** "
+                "to see what's happening, then check data/debug/ for a screenshot."
+            )
+        else:
+            track_a = [l for l in leads if l.track.value == "website_exists"]
+            track_b = [l for l in leads if l.track.value == "no_website"]
+            high    = [l for l in leads if l.opportunity_score and l.opportunity_score.priority.value == "high"]
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total leads", len(leads))
-        c2.metric("🔴 High priority", len(high))
-        c3.metric("Track A (has site)", len(track_a))
-        c4.metric("Track B (no site)", len(track_b))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Businesses found", len(leads))
+            c2.metric("Have a website", len(track_a))
+            c3.metric("No website", len(track_b))
+            c4.metric("High priority", len(high))
 
-        # results table
-        rows = []
-        for l in sorted(leads, key=lambda x: x.opportunity_score.final_score if x.opportunity_score else 0, reverse=True):
-            score = l.opportunity_score
-            rows.append({
-                "Business": l.business.name,
-                "Industry": l.business.industry,
-                "Track": "A: Website" if l.track.value == "website_exists" else "B: No Site",
-                "Score": score.final_score if score else "—",
-                "Priority": (score.priority.value if score else "—").upper(),
-                "Contact": l.business.owner_email or l.business.owner_name or "—",
-                "Email ready": "✓" if l.email_draft else "—",
-            })
-
-        if rows:
+            rows = []
+            for l in sorted(leads, key=lambda x: x.opportunity_score.final_score if x.opportunity_score else 0, reverse=True):
+                score = l.opportunity_score
+                rows.append({
+                    "Business": l.business.name,
+                    "Industry": l.business.industry,
+                    "Has website": "✓" if l.track.value == "website_exists" else "✗",
+                    "Score": score.final_score if score else "—",
+                    "Priority": (score.priority.value if score else "—").upper(),
+                    "Phone": l.business.phone or "—",
+                    "Address": l.business.address or "—",
+                })
             st.dataframe(rows, use_container_width=True, hide_index=True)
 
     elif "leads" not in st.session_state:
-        st.info("Configure settings in the sidebar, then click **Run**.")
+        st.info("Pick your industries in the sidebar and hit **Run**. No API keys needed.")
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — Review Queue
@@ -174,61 +134,50 @@ with tab_queue:
     q = ReviewQueue(settings.review_queue_path)
     pending = q.list_pending()
 
-    col_refresh, col_filter = st.columns([1, 3])
-    with col_refresh:
+    col_r, col_f = st.columns([1, 3])
+    with col_r:
         if st.button("🔄 Refresh"):
             pending = q.list_pending()
-
-    with col_filter:
-        priority_filter = st.selectbox(
-            "Filter by priority", ["All", "HIGH", "MEDIUM", "LOW"], index=0
-        )
+    with col_f:
+        priority_filter = st.selectbox("Filter", ["All", "HIGH", "MEDIUM", "LOW"])
 
     if priority_filter != "All":
         pending = [r for r in pending if r.get("priority", "").upper() == priority_filter]
 
     if not pending:
-        st.info("No pending leads. Run the pipeline first.")
+        st.info("No pending leads yet. Run the pipeline first.")
     else:
         st.write(f"**{len(pending)} leads** pending review")
 
         for idx, r in enumerate(sorted(pending, key=lambda x: x.get("score", 0), reverse=True)):
             priority = r.get("priority", "low").upper()
             color = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "⚫"}.get(priority, "⚫")
-            track_label = "Track B — No Site" if r["track"] == "no_website" else "Track A — Has Site"
+            has_site = r["track"] == "website_exists"
+            track_label = "Has website" if has_site else "No website"
 
-            with st.expander(
-                f"{color} **{r['business_name']}** · Score {r['score']} · {track_label}"
-            ):
-                col_a, col_b = st.columns(2)
-                with col_a:
+            with st.expander(f"{color} **{r['business_name']}** · {track_label} · Score {r['score']}"):
+                c1, c2 = st.columns(2)
+                with c1:
                     st.markdown(f"**Priority:** {priority}")
-                    st.markdown(f"**Track:** {track_label}")
+                    st.markdown(f"**Has website:** {'Yes' if has_site else 'No'}")
                     st.markdown(f"**Contact:** {r.get('owner_email') or r.get('owner_name') or '—'}")
-                    st.markdown(f"**Enqueued:** {r.get('enqueued_at', '—')[:19]}")
 
-                with col_b:
+                with c2:
                     if r.get("email_subject"):
                         st.markdown(f"**Subject:** {r['email_subject']}")
 
                 if r.get("email_body"):
-                    st.text_area(
-                        "Email Draft",
-                        value=r["email_body"],
-                        height=180,
-                        key=f"body_{idx}_{r['business_name'][:20]}",
-                    )
+                    st.text_area("Email Draft", value=r["email_body"], height=180,
+                                 key=f"body_{idx}")
 
-                btn_col1, btn_col2 = st.columns(2)
-                with btn_col1:
-                    if st.button("✅ Mark Sent", key=f"send_{idx}_{r['business_name'][:20]}"):
+                b1, b2 = st.columns(2)
+                with b1:
+                    if st.button("✅ Mark Sent", key=f"send_{idx}"):
                         q.mark_sent(r["business_name"])
-                        st.success("Marked as sent")
                         st.rerun()
-                with btn_col2:
-                    if st.button("⏭ Skip", key=f"skip_{idx}_{r['business_name'][:20]}"):
+                with b2:
+                    if st.button("⏭ Skip", key=f"skip_{idx}"):
                         q.mark_skipped(r["business_name"])
-                        st.info("Skipped")
                         st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -240,25 +189,24 @@ with tab_lead:
     leads_in_session = st.session_state.get("leads", [])
 
     if not leads_in_session:
-        st.info("Run the pipeline first to see lead details.")
+        st.info("Run the pipeline first.")
     else:
-        names = [l.business.name for l in leads_in_session]
-        selected = st.selectbox("Select a lead", names)
+        selected = st.selectbox("Select a business", [l.business.name for l in leads_in_session])
         lead = next((l for l in leads_in_session if l.business.name == selected), None)
 
         if lead:
             b = lead.business
             score = lead.opportunity_score
+            has_site = lead.track.value == "website_exists"
 
-            st.subheader(b.name)
+            # Header metrics
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Industry", b.industry.title())
-            c2.metric("Track", "A — Website" if lead.track.value == "website_exists" else "B — No Site")
+            c2.metric("Has website", "Yes ✓" if has_site else "No ✗")
             c3.metric("Score", score.final_score if score else "—")
             c4.metric("Priority", score.priority.value.upper() if score else "—")
 
             st.divider()
-
             left, right = st.columns(2)
 
             with left:
@@ -267,11 +215,9 @@ with tab_lead:
                 st.markdown(f"**Address:** {b.address or '—'}")
                 st.markdown(f"**Website:** {b.website_url or 'None'}")
                 st.markdown(f"**Google rating:** {b.google_rating or '—'} ({b.google_review_count or 0} reviews)")
-                st.markdown(f"**Owner:** {b.owner_name or '—'}")
-                st.markdown(f"**Email:** {b.owner_email or '—'}")
 
                 if score and score.scoring_notes:
-                    st.subheader("Scoring Notes")
+                    st.subheader("Why this score")
                     for note in score.scoring_notes:
                         st.markdown(f"- {note}")
 
@@ -279,35 +225,35 @@ with tab_lead:
                 if lead.website_analysis:
                     a = lead.website_analysis
                     st.subheader("Website Analysis")
-                    st.markdown(a.summary)
                     st.progress(a.website_score / 100, text=f"Website score: {a.website_score}/100")
+                    if a.summary:
+                        st.markdown(a.summary)
                     if a.top_issues:
-                        st.markdown("**Top Issues**")
+                        st.markdown("**Issues found**")
                         for i in a.top_issues:
                             st.markdown(f"- ⚠️ {i}")
                     if a.quick_wins:
-                        st.markdown("**Quick Wins**")
+                        st.markdown("**Quick wins**")
                         for w in a.quick_wins:
                             st.markdown(f"- ✅ {w}")
 
                 elif lead.digital_gap_analysis:
                     g = lead.digital_gap_analysis
-                    st.subheader("Digital Gap Analysis")
-                    st.markdown(g.summary)
+                    st.subheader("No Website — Gap Analysis")
                     st.progress(g.no_website_score / 100, text=f"Opportunity score: {g.no_website_score}/100")
-
+                    if g.summary:
+                        st.markdown(g.summary)
                     c1, c2 = st.columns(2)
                     c1.metric("Est. missed leads/mo", g.estimated_monthly_missed_leads)
                     c2.metric("Competitors with sites", f"{int(g.competitor_website_percentage*100)}%")
-
                     if g.visibility_gaps:
-                        st.markdown("**Visibility Gaps**")
+                        st.markdown("**Visibility gaps**")
                         for v in g.visibility_gaps:
                             st.markdown(f"- 🔍 {v}")
                     if g.fast_capture_recommendations:
-                        st.markdown("**Fast Capture Recs**")
-                        for r in g.fast_capture_recommendations:
-                            st.markdown(f"- 🚀 {r}")
+                        st.markdown("**What to do**")
+                        for rec in g.fast_capture_recommendations:
+                            st.markdown(f"- 🚀 {rec}")
 
             st.divider()
             st.subheader("Email Draft")
@@ -315,4 +261,4 @@ with tab_lead:
                 st.markdown(f"**Subject:** {lead.email_draft.subject}")
                 st.text_area("Body", value=lead.email_draft.body, height=200, key="detail_body")
             else:
-                st.info("No email draft generated (score below threshold or no Claude key).")
+                st.caption("Add an Anthropic key in the sidebar to generate personalised email copy.")

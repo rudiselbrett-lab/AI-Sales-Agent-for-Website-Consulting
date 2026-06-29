@@ -25,27 +25,22 @@ class ProspectingAgent:
     async def discover(self, industry: str, limit: int = 25) -> list[Business]:
         console.log(f"[cyan]Prospecting:[/cyan] '{industry}' in {self.city}, {self.state}")
 
-        # Primary: Playwright scraper (free, no key needed)
-        try:
-            results = await self.scraper.search(
-                query=industry,
-                city=self.city,
-                state=self.state,
-                industry=industry,
-                limit=limit,
+        results = await self.scraper.search(
+            query=industry,
+            city=self.city,
+            state=self.state,
+            industry=industry,
+            limit=limit,
+        )
+
+        if not results:
+            console.log(
+                f"[red]Scraper returned 0 results for '{industry}'.[/red] "
+                "Enable 'Show browser while scraping' in the UI to debug, "
+                "or check data/debug/ for a screenshot."
             )
-            if results:
-                return results
-        except Exception as exc:
-            console.log(f"[yellow]Scraper failed ({exc}) — trying SerpAPI fallback[/yellow]")
 
-        # Fallback: SerpAPI
-        if settings.serpapi_key:
-            return await self._serpapi_search(industry, limit)
-
-        # Dev fallback: mock data
-        console.log("[yellow]No scraper or API available — using mock data[/yellow]")
-        return self._mock_businesses(industry, limit)
+        return results
 
     async def _serpapi_search(self, industry: str, limit: int) -> list[Business]:
         params = {
