@@ -34,13 +34,32 @@ class WebsiteAnalysis(BaseModel):
     blog_post_count: int = 0
     last_updated_estimate: str | None = None
 
-    # AI narrative summary
+    # Staleness signals
+    copyright_year: int | None = None          # year found in footer copyright
+    is_stale: bool = False                     # True if site appears outdated
+    staleness_reasons: list[str] = []          # human-readable reasons
+    uses_outdated_tech: bool = False           # Flash, old jQuery, etc.
+    has_mobile_viewport: bool = False          # <meta name="viewport">
+
+    # Narrative (heuristic or AI-generated)
     summary: str = ""
     top_issues: list[str] = []
     quick_wins: list[str] = []
 
     # Score 0–100
     website_score: int = 0
+
+    @property
+    def age_label(self) -> str:
+        if not self.copyright_year:
+            return "Unknown age"
+        import datetime
+        age = datetime.datetime.now().year - self.copyright_year
+        if age <= 1:
+            return "Current"
+        if age <= 3:
+            return f"{age} years old"
+        return f"{age}+ years old — likely outdated"
 
 
 class DigitalGapAnalysis(BaseModel):

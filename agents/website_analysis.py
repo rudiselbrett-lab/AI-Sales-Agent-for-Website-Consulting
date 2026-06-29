@@ -31,8 +31,27 @@ class WebsiteAnalysisAgent:
         return analysis
 
     def _extract_signals(self, crawl: CrawlResult) -> dict:
+        import datetime
         html = crawl.pages.get("/", "")
         soup = BeautifulSoup(html, "html.parser") if html else BeautifulSoup("", "html.parser")
+        current_year = datetime.datetime.now().year
+
+        # ── Staleness detection ──────────────────────────────────────────────
+        copyright_year = self._detect_copyright_year(soup, html)
+        outdated_tech = self._detect_outdated_tech(soup, html)
+        has_mobile_viewport = bool(soup.find("meta", attrs={"name": "viewport"}))
+
+        staleness_reasons = []
+        if copyright_year and copyright_year < current_year - 3:
+            staleness_reasons.append(f"Copyright year shows {copyright_year} — likely {current_year - copyright_year}+ years without an update")
+        if outdated_tech:
+            staleness_reasons.append("Uses outdated web technology (Flash / old jQuery)")
+        if not has_mobile_viewport:
+            staleness_reasons.append("No mobile viewport tag — site may not be mobile-friendly")
+        if not crawl.is_https:
+            staleness_reasons.append("Still on HTTP (not HTTPS) — browser security warnings likely")
+
+        is_stale = len(staleness_reasons) >= 2 or (copyright_year is not None and copyright_year < current_year - 4)
 
         return {
             "has_title_tag": bool(soup.find("title") and soup.find("title").get_text(strip=True)),
@@ -53,7 +72,42 @@ class WebsiteAnalysisAgent:
                 soup.find(string=lambda t: t and any(w in t.lower() for w in ["testimonial", "review", "customer said"]))
             ),
             "page_count_crawled": len(crawl.pages),
+            # Staleness
+            "copyright_year": copyright_year,
+            "is_stale": is_stale,
+            "staleness_reasons": staleness_reasons,
+            "uses_outdated_tech": outdated_tech,
+            "has_mobile_viewport": has_mobile_viewport,
         }
+
+    def _detect_copyright_year(self, soup, html: str) -> int | None:
+        import re, datetime
+        current_year = datetime.datetime.now().year
+        # Look in footer first, then full page
+        footer = soup.find("footer") or soup
+        text = footer.get_text(" ", strip=True)
+        # Match patterns like © 2019, Copyright 2019, 2015-2019
+        matches = re.findall(r"(?:©|copyright|\(c\))[^\d]*(\d{4})", text.lower())
+        # Also catch year ranges: 2015–2023 → take the last year
+        range_matches = re.findall(r"(\d{4})\s*[-–—]\s*(\d{4})", text)
+        years = [int(y) for y in matches if 1990 <= int(y) <= current_year]
+        for start, end in range_matches:
+            if 1990 <= int(end) <= current_year:
+                years.append(int(end))
+        return max(years) if years else None
+
+    def _detect_outdated_tech(self, soup, html: str) -> bool:
+        # Flash
+        if soup.find("object", attrs={"type": "application/x-shockwave-flash"}):
+            return True
+        if "swfobject" in html.lower() or ".swf" in html.lower():
+            return True
+        # Very old jQuery (1.x)
+        import re
+        old_jquery = re.search(r'jquery[.-]1\.[0-6]\.', html.lower())
+        if old_jquery:
+            return True
+        return False
 
     async def _ai_score(
         self, business: Business, signals: dict, crawl: CrawlResult
@@ -114,39 +168,89 @@ Scoring guidance (0–100):
         return self._build_analysis(business, signals, ai_data)
 
     def _heuristic_score(self, business: Business, signals: dict) -> WebsiteAnalysis:
-        """Pure heuristic scoring when no Claude key is available."""
-        score = 50
+        """Heuristic scoring with staleness detection — no API key required."""
+        import datetime
+        current_year = datetime.datetime.now().year
+        score = 60
         issues, wins = [], []
 
+        # ── Staleness (biggest deductions) ───────────────────────────────────
+        copyright_year = signals.get("copyright_year")
+        if copyright_year:
+            age = current_year - copyright_year
+            if age >= 5:
+                score -= 25
+                issues.append(f"Website appears to be from {copyright_year} — {age} years without a visible update")
+            elif age >= 3:
+                score -= 12
+                issues.append(f"Copyright shows {copyright_year} — site may be outdated")
+
+        if signals.get("uses_outdated_tech"):
+            score -= 15
+            issues.append("Uses outdated technology (Flash or old JavaScript libraries)")
+
+        if not signals.get("has_mobile_viewport"):
+            score -= 15
+            issues.append("Not optimised for mobile — likely breaks on phones")
+            wins.append("Add a mobile-responsive design or rebuild with a modern template")
+
+        # ── Trust / security ──────────────────────────────────────────────────
         if not signals["has_ssl"]:
             score -= 10
-            issues.append("No HTTPS — browsers may warn visitors")
+            issues.append("No HTTPS — Chrome shows a 'Not Secure' warning to visitors")
+            wins.append("Switch to HTTPS (usually free via Let's Encrypt)")
+
+        # ── Conversion ────────────────────────────────────────────────────────
         if not signals["has_contact_form"] and not signals["has_phone_cta"]:
             score -= 10
-            issues.append("No visible contact CTA")
-            wins.append("Add a click-to-call button above the fold")
+            issues.append("No clear way to contact or call from the site")
+            wins.append("Add a click-to-call button and simple contact form")
+
+        # ── SEO basics ────────────────────────────────────────────────────────
         if not signals["has_title_tag"]:
             score -= 8
-            issues.append("Missing title tag — hurts SEO")
-            wins.append("Add a descriptive title tag")
+            issues.append("Missing page title — hurts Google ranking")
+            wins.append("Add a descriptive title tag to every page")
         if not signals["has_meta_description"]:
-            score -= 5
-            wins.append("Add a meta description for search snippets")
+            score -= 4
+            wins.append("Add meta descriptions to improve click-through from search results")
+        if not signals["has_h1"]:
+            score -= 4
+            issues.append("No H1 heading — search engines can't identify the main topic")
+
+        # ── Speed ─────────────────────────────────────────────────────────────
         if signals["load_time_seconds"] and signals["load_time_seconds"] > 3:
             score -= 8
-            issues.append(f"Slow load: {signals['load_time_seconds']}s")
-            wins.append("Compress images and enable browser caching")
-        if not signals["has_schema_markup"]:
-            score -= 5
+            issues.append(f"Slow load time ({signals['load_time_seconds']}s) — visitors drop off after 3s")
+            wins.append("Compress images and enable caching to improve load speed")
 
-        score = max(10, min(100, score))
+        score = max(5, min(100, score))
+
+        # ── Plain-English summary ─────────────────────────────────────────────
+        if score >= 70:
+            verdict = "reasonably modern"
+        elif score >= 50:
+            verdict = "functional but showing its age"
+        elif score >= 30:
+            verdict = "significantly outdated"
+        else:
+            verdict = "severely outdated and likely hurting the business"
+
+        year_note = f" Last updated around {copyright_year}." if copyright_year else ""
+        summary = (
+            f"{business.name}'s website is {verdict}.{year_note} "
+            f"{'It is not mobile-friendly, which affects the majority of local search visitors. ' if not signals.get('has_mobile_viewport') else ''}"
+            f"Found {len(issues)} issue{'s' if len(issues) != 1 else ''} that are likely costing them inbound leads."
+        )
+
         return self._build_analysis(business, signals, {
             "website_score": score,
-            "summary": f"Heuristic audit of {business.name}'s website. Add your Anthropic key for a full AI-generated analysis.",
-            "top_issues": issues,
-            "quick_wins": wins,
-            "mobile_friendly": False,
+            "summary": summary,
+            "top_issues": issues[:4],
+            "quick_wins": wins[:3],
+            "mobile_friendly": signals.get("has_mobile_viewport", False),
             "has_clear_services_page": signals["has_services_page"],
+            "last_updated_estimate": str(copyright_year) if copyright_year else None,
         })
 
     def _build_analysis(self, business: Business, signals: dict, ai_data: dict) -> WebsiteAnalysis:
@@ -161,15 +265,21 @@ Scoring guidance (0–100):
             has_google_maps_embed=signals["has_google_maps_embed"],
             has_ssl=signals["has_ssl"],
             has_sitemap=signals["has_sitemap"],
-            has_clear_services_page=ai_data.get("has_clear_services_page", signals["has_services_page"]),
+            has_clear_services_page=ai_data.get("has_clear_services_page", signals.get("has_services_page", False)),
             has_about_page=signals["has_about_page"],
             has_testimonials=signals["has_testimonials"],
             image_count=signals["image_count"],
             has_lazy_loading=signals["has_lazy_loading"],
             load_time_seconds=signals["load_time_seconds"],
             page_count_estimate=signals["page_count_crawled"],
-            mobile_friendly=ai_data.get("mobile_friendly", False),
+            mobile_friendly=ai_data.get("mobile_friendly", signals.get("has_mobile_viewport", False)),
             last_updated_estimate=ai_data.get("last_updated_estimate"),
+            # Staleness fields
+            copyright_year=signals.get("copyright_year"),
+            is_stale=signals.get("is_stale", False),
+            staleness_reasons=signals.get("staleness_reasons", []),
+            uses_outdated_tech=signals.get("uses_outdated_tech", False),
+            has_mobile_viewport=signals.get("has_mobile_viewport", False),
             summary=ai_data.get("summary", ""),
             top_issues=ai_data.get("top_issues", []),
             quick_wins=ai_data.get("quick_wins", []),

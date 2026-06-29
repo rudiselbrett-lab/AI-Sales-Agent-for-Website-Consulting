@@ -108,14 +108,22 @@ with tab_run:
             rows = []
             for l in sorted(leads, key=lambda x: x.opportunity_score.final_score if x.opportunity_score else 0, reverse=True):
                 score = l.opportunity_score
+                stale = ""
+                if l.website_analysis:
+                    if l.website_analysis.is_stale:
+                        stale = f"Stale ({l.website_analysis.copyright_year or '?'})"
+                    elif l.website_analysis.copyright_year:
+                        stale = str(l.website_analysis.copyright_year)
+
                 rows.append({
                     "Business": l.business.name,
                     "Industry": l.business.industry,
                     "Has website": "✓" if l.track.value == "website_exists" else "✗",
+                    "Site age": stale or ("—" if l.track.value == "website_exists" else "N/A"),
+                    "Mobile": "✓" if (l.website_analysis and l.website_analysis.has_mobile_viewport) else ("—" if l.track.value == "no_website" else "✗"),
                     "Score": score.final_score if score else "—",
                     "Priority": (score.priority.value if score else "—").upper(),
                     "Phone": l.business.phone or "—",
-                    "Address": l.business.address or "—",
                 })
             st.dataframe(rows, use_container_width=True, hide_index=True)
 
@@ -225,9 +233,26 @@ with tab_lead:
                 if lead.website_analysis:
                     a = lead.website_analysis
                     st.subheader("Website Analysis")
+
+                    # Staleness badge
+                    if a.is_stale:
+                        st.error(f"⚠️ Stale website — {a.age_label}")
+                    elif a.copyright_year:
+                        st.warning(f"🕐 {a.age_label}")
+                    else:
+                        st.info("Age unknown — no copyright date found")
+
                     st.progress(a.website_score / 100, text=f"Website score: {a.website_score}/100")
+
                     if a.summary:
                         st.markdown(a.summary)
+
+                    # Quick fact chips
+                    fc1, fc2, fc3 = st.columns(3)
+                    fc1.metric("Mobile ready", "✓" if a.has_mobile_viewport else "✗")
+                    fc2.metric("HTTPS", "✓" if a.has_ssl else "✗")
+                    fc3.metric("Load time", f"{a.load_time_seconds}s" if a.load_time_seconds else "—")
+
                     if a.top_issues:
                         st.markdown("**Issues found**")
                         for i in a.top_issues:
