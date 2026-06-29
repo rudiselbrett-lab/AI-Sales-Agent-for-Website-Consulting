@@ -102,7 +102,11 @@ class WebsiteRouter:
                 if "google." in domain:
                     continue
 
-                # Check it actually resolves
+                # Only accept if the domain looks like it belongs to this business
+                if not self._domain_matches_business(domain, business.name):
+                    continue
+
+                # Confirm the site is live
                 status = await self._probe_url(candidate)
                 if status == WebsiteStatus.EXISTS:
                     return candidate
@@ -111,6 +115,27 @@ class WebsiteRouter:
             console.log(f"[dim]Google search fallback failed for {business.name}: {exc}[/dim]")
 
         return None
+
+    def _domain_matches_business(self, domain: str, business_name: str) -> bool:
+        """
+        Returns True only if the domain plausibly belongs to this business.
+        Checks whether meaningful words from the business name appear in the domain.
+        """
+        # Normalize: lowercase, strip punctuation, split into words
+        stop_words = {"the", "and", "of", "a", "an", "in", "at", "for",
+                      "llc", "inc", "co", "company", "services", "service",
+                      "group", "solutions", "professionals", "pros"}
+
+        name_words = re.sub(r"[^a-z0-9\s]", "", business_name.lower()).split()
+        meaningful = [w for w in name_words if w not in stop_words and len(w) > 2]
+
+        if not meaningful:
+            return False
+
+        domain_clean = re.sub(r"\.[^.]+$", "", domain.lower())  # strip TLD
+
+        # At least one meaningful word from the business name must appear in the domain
+        return any(word in domain_clean for word in meaningful)
 
     def _extract_domain(self, url: str) -> str:
         m = re.search(r"https?://(?:www\.)?([^/?#]+)", url)
